@@ -19,8 +19,11 @@ import (
 	"time"
 
 	"github.com/akamensky/argparse"
+	"github.com/bytedance/sonic"
 	"github.com/kenshaw/evdev"
 	"go.bug.st/serial"
+	"log"
+	"math"
 )
 
 type event_pack struct {
@@ -135,6 +138,107 @@ func udp_event_injector(ch chan *event_pack, port int) {
 			}
 			ch <- e_pack
 			// logger.Debugf("接收到事件 : %v", e_pack)
+		}
+	}
+}
+func unixEventInjector(ch chan *event_pack, port int) {
+	listen, err := net.Listen("unix", "/tmp/control.sock")
+	if err != nil {
+		logger.Errorf("udp error : %v", err)
+		return
+	}
+	defer listen.Close()
+	//listen, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%v", port))
+	//if err != nil {
+	//	logger.Errorf("udp error : %v", err)
+	//	return
+	//}
+	recv_ch := make(chan []byte)
+	go func() {
+		for {
+			conn, err := listen.Accept()
+			if err != nil {
+				logger.Errorf("Accept error: %v", err)
+				break
+			}
+
+			// 为每个连接启动一个处理 goroutine
+			go func(c net.Conn) {
+				defer c.Close()
+
+				// 使用缓冲区来处理粘包问题
+				var buf []byte
+				readBuf := make([]byte, 40960) // 读取缓冲区
+				expectedLength := -1           // 期望的消息长度，-1表示需要读取包头
+
+				for {
+					n, err := c.Read(readBuf)
+					if err != nil {
+						logger.Errorf("Read error: %v", err)
+						break
+					}
+
+					// 将新读取的数据添加到缓冲区
+					buf = append(buf, readBuf[:n]...)
+
+					// 处理缓冲区中的所有完整消息
+					for {
+						// 如果还不知道消息长度，先读取4字节包头
+						if expectedLength == -1 && len(buf) >= 4 {
+							expectedLength = int(binary.BigEndian.Uint32(buf[:4]))
+							buf = buf[4:] // 移除包头
+						}
+
+						// 如果已经知道消息长度且缓冲区中有足够数据
+						if expectedLength != -1 && len(buf) >= expectedLength {
+							// 提取完整消息
+							message := buf[:expectedLength]
+							recv_ch <- message
+
+							// 移除已处理的数据
+							buf = buf[expectedLength:]
+							expectedLength = -1 // 重置为需要读取下一个包头
+
+							// 继续处理缓冲区中可能存在的下一条消息
+							continue
+						}
+
+						// 没有足够数据或没有完整消息，跳出内层循环继续读取
+						break
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	logger.Infof("已准备接收远程事件: 0.0.0.0:%d", port)
+	for {
+		select {
+		case <-global_close_signal:
+			return
+		case pack := <-recv_ch:
+			if len(pack) < 1 {
+				logger.Warnf("收到空数据包")
+				continue
+			}
+
+			var eventPack struct {
+				//表示一个动作 由一系列event组成
+				DevName string         `json:"dev_name"`
+				DevType dev_type       `json:"dev_type"`
+				Events  []*evdev.Event `json:"events"`
+			}
+			t := time.Now()
+			if err = sonic.Unmarshal(pack, &eventPack); err != nil {
+				continue
+			}
+			logger.Debugf("解码时间: %v", time.Since(t))
+			ePack := &event_pack{
+				dev_name: eventPack.DevName,
+				dev_type: eventPack.DevType,
+				events:   eventPack.Events,
+			}
+			ch <- ePack
 		}
 	}
 }
@@ -510,7 +614,6 @@ func main() {
 		Default:  "1440x3440x1",
 		Help:     "使用串口控制HID设备模拟触屏的屏幕参数，宽x高x旋转方向，例如1440x3440x1",
 	})
-
 	var using_remote_control *bool = parser.Flag("r", "remoteControl", &argparse.Options{
 		Required: false,
 		Default:  false,
@@ -675,6 +778,49 @@ func main() {
 				screen_x: int32(hid_x),
 				screen_y: int32(hid_y),
 			})
+			go func() {
+				buffer := make([]byte, 1024)
+				dataBuffer := make([]byte, 0, 1024)
+				for {
+					// 读取数据
+					n, err := port.Read(buffer)
+					if err != nil {
+						log.Println("Read error:", err)
+						continue
+					}
+
+					if n > 0 {
+						dataBuffer = append(dataBuffer, buffer[:n]...)
+
+						// 处理数据包
+						packets := parsePackets(&dataBuffer)
+
+						for _, packet := range packets {
+							x, y := constrainToInscribedCircleInt(int(packet.X), int(packet.Y), 1023)
+							e_pack := &event_pack{
+								dev_name: "joy",
+								dev_type: 2,
+								events: []*evdev.Event{
+									{
+										Type:  evdev.EventAbsolute,
+										Code:  0,
+										Value: int32(x),
+									},
+									{
+										Type:  evdev.EventAbsolute,
+										Code:  1,
+										Value: int32(y),
+									},
+								},
+							}
+							events_ch <- e_pack
+							fmt.Printf("X: %4d, Y: %4d\n", packet.X, packet.Y)
+						}
+					}
+
+					time.Sleep(10 * time.Millisecond)
+				}
+			}()
 
 		} else if *usingInputManagerID != -1 {
 			logger.Info("触屏控制将使用inputManager处理")
@@ -719,6 +865,7 @@ func main() {
 
 		if *using_remote_control {
 			go udp_event_injector(events_ch, *port)
+			go unixEventInjector(events_ch, *port)
 		}
 
 		if *measure_sensitivity_mode {
@@ -734,4 +881,83 @@ func main() {
 		logger.Info("已停止")
 		time.Sleep(time.Millisecond * 40)
 	}
+}
+
+// 解析数据包
+func parsePackets(buffer *[]byte) []JoystickData {
+	var packets []JoystickData
+	data := *buffer
+
+	for {
+		// 查找起始字节 0xAA
+		startIndex := -1
+		for i := 0; i < len(data); i++ {
+			if data[i] == 0xAA {
+				startIndex = i
+				break
+			}
+		}
+
+		if startIndex == -1 {
+			// 没有找到起始字节，清空缓冲区
+			*buffer = []byte{}
+			return packets
+		}
+
+		// 移除起始字节之前的数据
+		data = data[startIndex:]
+
+		// 检查是否有足够的数据（6字节：起始标志 + X(2) + Y(2) + 结束标志）
+		if len(data) < 6 {
+			*buffer = data
+			return packets
+		}
+
+		// 检查结束字节
+		if data[5] != 0x55 {
+			// 结束字节不匹配，跳过这个起始字节继续查找
+			data = data[1:]
+			continue
+		}
+
+		// 解析数据
+		x := int16(binary.BigEndian.Uint16(data[1:3]))
+		y := int16(binary.BigEndian.Uint16(data[3:5]))
+
+		packets = append(packets, JoystickData{X: x, Y: y})
+
+		// 移除已处理的数据包
+		data = data[6:]
+	}
+}
+
+// 整数版本的限位函数（避免浮点运算）
+func constrainToInscribedCircleInt(x, y, maxValue int) (int, int) {
+	if x == 0 && y == 0 {
+		return 0, 0
+	}
+
+	// 使用整数运算计算距离平方
+	xSq := x * x
+	ySq := y * y
+	maxSq := maxValue * maxValue
+
+	// 如果坐标点在内接圆外
+	if xSq+ySq > maxSq {
+		// 计算缩放因子（使用定点数运算）
+		// 这里使用 1024 作为精度因子
+		distance := int(math.Sqrt(float64(xSq + ySq)))
+		scale := (maxValue << 10) / distance // 左移10位相当于乘以1024
+
+		// 应用缩放
+		x = (x * scale) >> 10
+		y = (y * scale) >> 10
+	}
+
+	return x, y
+}
+
+type JoystickData struct {
+	X int16
+	Y int16
 }

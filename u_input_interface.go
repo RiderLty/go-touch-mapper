@@ -507,3 +507,87 @@ func handel_touch_using_uinput_touch() touch_control_func {
 		// logger.Debugf("uinput handeler%v", time.Since(start))
 	}
 }
+
+//
+//func handelTouchUsingEsp32() touch_control_func {
+//
+//	rot_xy := func(pack touch_control_pack) (int32, int32) { //根据方向旋转坐标
+//		switch global_device_orientation {
+//		case 0:
+//			return pack.x, pack.y
+//		case 1:
+//			return pack.screen_y - pack.y, pack.x
+//		case 2:
+//			return pack.screen_x - pack.x, pack.screen_y - pack.y
+//		case 3:
+//			return pack.y, pack.screen_x - pack.x
+//		default:
+//			return pack.x, pack.y
+//		}
+//	}
+//
+//	mode := &serial.Mode{
+//		BaudRate: 2000000,
+//	}
+//	port, err := serial.Open("/dev/ttyACM0", mode)
+//	if err != nil {
+//		panic(err)
+//	}
+//
+//	go func() {
+//		<-global_close_signal
+//		port.Close()
+//	}()
+//	// 创建触摸报告数据包
+//	createTouchReport := func(id byte, x, y int32, down bool) []byte {
+//		if x < 0 {
+//			x = 0
+//		}
+//		if y < 0 {
+//			y = 0
+//		}
+//		if x > 119999 { // 32bit X 范围
+//			x = 119999
+//		}
+//		if y > 266999 { // 32bit Y 范围
+//			y = 266999
+//		}
+//
+//		state := byte(0x01) // 按下
+//		if !down {
+//			state = 0x00 // 抬起
+//		}
+//
+//		// 创建小端序字节切片（10 字节）
+//		data := make([]byte, 12)
+//		data[0] = state
+//		data[1] = id
+//		binary.LittleEndian.PutUint32(data[4:8], uint32(x))
+//		binary.LittleEndian.PutUint32(data[8:12], uint32(y))
+//
+//		return data
+//	}
+//
+//	return func(control_data touch_control_pack) {
+//		// write_events := make([]*evdev.Event, 0)
+//		// start := time.Now()
+//		if control_data.id == -1 { //在任何正常情况下 这里是拿不到ID=-1的控制包的因此可以直接丢弃
+//			return
+//		}
+//		if control_data.action == TouchActionRequire {
+//			data := createTouchReport(byte(control_data.id), control_data.x, control_data.y, true)
+//
+//			_, _ = port.Write(data)
+//
+//		} else if control_data.action == TouchActionRelease {
+//			data := createTouchReport(byte(control_data.id), control_data.x, control_data.y, false)
+//
+//			_, _ = port.Write(data)
+//
+//		} else if control_data.action == TouchActionMove {
+//			data := createTouchReport(byte(control_data.id), control_data.x, control_data.y, true)
+//			_, _ = port.Write(data)
+//		}
+//		// logger.Debugf("uinput handeler%v", time.Since(start))
+//	}
+//}

@@ -50,6 +50,7 @@ func handel_touch_using_hid_manager(port serial.Port, screenX, screenY uint32, r
 
 	return func(control_data touch_control_pack) {
 		switch control_data.action {
+
 		// case TouchActionRequire or TouchActionMove:
 		case TouchActionRequire, TouchActionMove:
 			x, y := rot_xy(control_data)
