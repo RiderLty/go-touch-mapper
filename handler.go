@@ -33,6 +33,7 @@ type TouchHandler struct {
 	view_init_x             int32                //初始化视角映射的x坐标
 	view_init_y             int32                //初始化视角映射的y坐标
 	view_range              int32                //随机的范围
+	view_slide_range        int32                //滑动边界（缩放坐标系，相对视角中心）
 	view_action_select      struct{ x, y int32 } //用户选择的视角映射点
 	view_current_x          int32                //当前视角映射的x坐标
 	view_current_y          int32                //当前视角映射的y坐标
@@ -351,6 +352,7 @@ func InitTouchHandler(
 		view_init_x:        int32(config_json.Get("MOUSE").Get("POS").GetIndex(0).MustFloat64() * float64(screenSizeX)),
 		view_init_y:        int32(config_json.Get("MOUSE").Get("POS").GetIndex(1).MustFloat64() * float64(screenSizeY)),
 		view_range:         int32(config_json.Get("MOUSE").Get("RANGE").MustFloat64() * float64(screenSizeX)),
+		view_slide_range:   int32(config_json.Get("MOUSE").Get("SLIDE_RANGE").MustFloat64() * 0x7ffffffe),
 		view_action_select: struct{ x, y int32 }{-1, -1},
 		view_current_x:     int32(config_json.Get("MOUSE").Get("POS").GetIndex(0).MustFloat64() * float64(screenSizeX)),
 		view_current_y:     int32(config_json.Get("MOUSE").Get("POS").GetIndex(1).MustFloat64() * float64(screenSizeY)),
@@ -430,6 +432,7 @@ func (self *TouchHandler) reloadConfigure(mapperFilePath string) {
 	self.view_init_x = int32(config_json.Get("MOUSE").Get("POS").GetIndex(0).MustFloat64() * float64(screenSizeX))
 	self.view_init_y = int32(config_json.Get("MOUSE").Get("POS").GetIndex(1).MustFloat64() * float64(screenSizeY))
 	self.view_range = int32(config_json.Get("MOUSE").Get("RANGE").MustFloat64() * float64(screenSizeX))
+	self.view_slide_range = int32(config_json.Get("MOUSE").Get("SLIDE_RANGE").MustFloat64() * 0x7ffffffe)
 	self.view_current_x = int32(config_json.Get("MOUSE").Get("POS").GetIndex(0).MustFloat64() * float64(screenSizeX))
 	self.view_current_y = int32(config_json.Get("MOUSE").Get("POS").GetIndex(1).MustFloat64() * float64(screenSizeY))
 	self.view_speed_x = int32(config_json.Get("MOUSE").Get("SPEED").GetIndex(0).MustFloat64() * 0x7ffffffe / float64(screenSizeX))
@@ -594,14 +597,21 @@ func (self *TouchHandler) handel_view_move(offset_x int32, offset_y int32) { //�
 	}
 	self.view_current_x += offset_x * self.view_speed_x
 	self.view_current_y += offset_y * self.view_speed_y
-	if self.view_current_x < 0 || self.view_current_y < 0 { //出现负数 表示到达边界
-		// self.view_current_x, self.view_current_y = self.get_scaled_pos(self.view_init_x+rand_offset(), self.view_init_y+rand_offset())
+	// 滑动边界判断（相对视角中心的正方形区域，仅常规视角滑动时生效）
+	slide_out := false
+	if self.view_action_select.x == -1 && self.view_action_select.y == -1 && self.view_slide_range > 0 {
+		init_sx, init_sy := self.get_scaled_pos(self.view_init_x, self.view_init_y)
+		slide_out = self.view_current_x < init_sx-self.view_slide_range || self.view_current_x > init_sx+self.view_slide_range ||
+			self.view_current_y < init_sy-self.view_slide_range || self.view_current_y > init_sy+self.view_slide_range
+	}
+	if slide_out || self.view_current_x < 0 || self.view_current_y < 0 { //超出滑动边界或屏幕边界，回到中间重新选点
+		self.touch_release(self.view_id)                                 //先抬起旧触摸
+		time.Sleep(time.Duration(5+rand.Intn(6)) * time.Millisecond)     //随机延迟5~10ms，模拟重新落点
 		self.view_current_x, self.view_current_y = self.getViewStartPos()
 		tmp_view_id := self.touch_require(self.view_current_x, self.view_current_y, false)
 		self.view_current_x += offset_x * self.view_speed_x
 		self.view_current_y += offset_y * self.view_speed_y
 		self.touch_move(tmp_view_id, self.view_current_x, self.view_current_y, false)
-		self.touch_release(self.view_id)
 		self.view_id = tmp_view_id
 	} else {
 		self.touch_move(self.view_id, self.view_current_x, self.view_current_y, false)
@@ -812,7 +822,19 @@ func (self *TouchHandler) execute_key_action(start time.Time, key_name string, u
 			}
 			x := int32(action.Get("POS").GetIndex(0).MustFloat64()*float64(self.rel_screen_x)) + rand_offset()
 			y := int32(action.Get("POS").GetIndex(1).MustFloat64()*float64(self.rel_screen_y)) + rand_offset()
-			self.key_action_state_save.Store(key_name, self.touch_require(x, y, true))
+			tid := self.touch_require(x, y, true)
+			self.key_action_state_save.Store(key_name, tid)
+			go (func() {
+				// 长按抖动：按住期间持续随机微移触摸点，避免长时间静止被识别为挂机
+				for {
+					time.Sleep(time.Duration(15) * time.Millisecond)
+					saved, ok := self.key_action_state_save.Load(key_name)
+					if !ok || saved.(int32) != tid {
+						return
+					}
+					self.touch_move(tid, x+rand_offset(), y+rand_offset(), true)
+				}
+			})()
 		case UP:
 			if !contains {
 				logger.Errorf("key[%s]%s\t状态异常，忽略此次事件", key_name, UDF[up_down])

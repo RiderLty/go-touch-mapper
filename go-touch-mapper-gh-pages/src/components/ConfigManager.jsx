@@ -122,6 +122,7 @@ export default function ConfigManager() {
         "MOUSE": {
             "SWITCH_KEYS": ["KEY_GRAVE"],
             "RANGE": 0.05,
+            "SLIDE_RANGE": 0.5,
             "POS": [
                 0.52,
                 0.5
@@ -444,6 +445,7 @@ export default function ConfigManager() {
         const wheelPosSelecting = useRef(false)
         const [range, setRange] = useState(config["WHEEL"]["RANGE"] * 100)
         const [viewRange, setViewRange] = useState(config["MOUSE"]["RANGE"] * 100)
+        const [slideRange, setSlideRange] = useState((config["MOUSE"]["SLIDE_RANGE"] || 0.5) * 100)
         const [shiftRange, setShiftRange] = useState(config["WHEEL"]["SHIFT_RANGE"] * 100)
 
         const [setPosButtonDisabled, setSetPosButtonDisabled] = useState(false)
@@ -804,6 +806,35 @@ export default function ConfigManager() {
                                 onChangeCommitted={(_, value) => {
                                     setViewRange(value)
                                     setConfig(produce(draft => { draft.MOUSE.RANGE = Number(value) / 100; }))
+                                }}
+                            />
+                        </Grid>
+                    </Grid>
+                </Grid>
+
+                <Grid
+                    container
+                    direction="row"
+                    justifyContent="flex-start"
+                    alignItems="center"
+                    sx={{
+                        height: "50px",
+                    }}
+                >
+                    <Typography gutterBottom>
+                        滑动边界 {Number.parseInt(slideRange * config["SCREEN"]["SIZE"][0] / 100)}
+                    </Typography>
+                    <Grid container spacing={2}>
+                        <Grid item xs>
+                            <Slider
+                                min={viewRange}
+                                max={50}
+                                step={1}
+                                value={slideRange}
+                                onChange={(_, value) => { setSlideRange(value) }}
+                                onChangeCommitted={(_, value) => {
+                                    setSlideRange(value)
+                                    setConfig(produce(draft => { draft.MOUSE.SLIDE_RANGE = Number(value) / 100; }))
                                 }}
                             />
                         </Grid>
@@ -1614,7 +1645,7 @@ export default function ConfigManager() {
             range={getPostionValueX(config["WHEEL"]["RANGE"])}
             shift_range={config["WHEEL"]["SHIFT_RANGE_ENABLE"] ? getPostionValueX(config["WHEEL"]["SHIFT_RANGE"]) : 0}
         />
-        <ViewShow x={getPostionValueX(config["MOUSE"]["POS"][0])} y={getPostionValueY(config["MOUSE"]["POS"][1])} range={getPostionValueX(config["MOUSE"]["RANGE"])} />
+        <ViewShow x={getPostionValueX(config["MOUSE"]["POS"][0])} y={getPostionValueY(config["MOUSE"]["POS"][1])} range={getPostionValueX(config["MOUSE"]["RANGE"])} slide_range={getPostionValueX(config["MOUSE"]["SLIDE_RANGE"] || 0)} />
         <input id="fileInput" type="file" style={{ display: "none" }} accept="image/*" onChange={handleFileChange} ></input>
         <SlotManagerDialog
             open={slotDialogOpen}
