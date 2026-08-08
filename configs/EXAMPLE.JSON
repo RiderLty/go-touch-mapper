@@ -8,6 +8,7 @@
         "MOUSE": {
             "SWITCH_KEYS": ["KEY_GRAVE"],
             "RANGE": 0.05,
+            "SLIDE_RANGE": 0.5,
             "POS": [
                 0.52,
                 0.5
