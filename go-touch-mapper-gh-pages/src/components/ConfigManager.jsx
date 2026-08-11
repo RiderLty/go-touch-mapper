@@ -123,6 +123,8 @@ export default function ConfigManager() {
             "SWITCH_KEYS": ["KEY_GRAVE"],
             "RANGE": 0.05,
             "SLIDE_RANGE": 0.5,
+            "SLIDE_RANGE_ENABLE": true,
+            "HANDOFF_DELAY": 7,
             "POS": [
                 0.52,
                 0.5
@@ -446,6 +448,8 @@ export default function ConfigManager() {
         const [range, setRange] = useState(config["WHEEL"]["RANGE"] * 100)
         const [viewRange, setViewRange] = useState(config["MOUSE"]["RANGE"] * 100)
         const [slideRange, setSlideRange] = useState((config["MOUSE"]["SLIDE_RANGE"] || 0.5) * 100)
+        const [slideRangeEnable, setSlideRangeEnable] = useState(config["MOUSE"]["SLIDE_RANGE_ENABLE"] !== false)
+        const [handoffDelay, setHandoffDelay] = useState(config["MOUSE"]["HANDOFF_DELAY"] || 7)
         const [shiftRange, setShiftRange] = useState(config["WHEEL"]["SHIFT_RANGE"] * 100)
 
         const [setPosButtonDisabled, setSetPosButtonDisabled] = useState(false)
@@ -793,6 +797,35 @@ export default function ConfigManager() {
                     }}
                 >
                     <Typography gutterBottom>
+                        交接延迟 {handoffDelay}ms
+                    </Typography>
+                    <Grid container spacing={2}>
+                        <Grid item xs>
+                            <Slider
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={handoffDelay}
+                                onChange={(_, value) => { setHandoffDelay(value) }}
+                                onChangeCommitted={(_, value) => {
+                                    setHandoffDelay(value)
+                                    setConfig(produce(draft => { draft.MOUSE.HANDOFF_DELAY = value; }))
+                                }}
+                            />
+                        </Grid>
+                    </Grid>
+                </Grid>
+
+                <Grid
+                    container
+                    direction="row"
+                    justifyContent="flex-start"
+                    alignItems="center"
+                    sx={{
+                        height: "50px",
+                    }}
+                >
+                    <Typography gutterBottom>
                         随机范围 {Number.parseInt(viewRange * config["SCREEN"]["SIZE"][0] / 100)}
                     </Typography>
                     <Grid container spacing={2}>
@@ -824,6 +857,16 @@ export default function ConfigManager() {
                     <Typography gutterBottom>
                         滑动边界 {Number.parseInt(slideRange * config["SCREEN"]["SIZE"][0] / 100)}
                     </Typography>
+                    <Typography gutterBottom>
+                        {slideRangeEnable ? "启用外半径" : "禁用外半径(以屏幕边界为准)"}
+                    </Typography>
+                    <Switch
+                        checked={slideRangeEnable}
+                        onChange={() => {
+                            setSlideRangeEnable(!slideRangeEnable)
+                            setConfig(produce(draft => { draft.MOUSE.SLIDE_RANGE_ENABLE = !slideRangeEnable; }))
+                        }}
+                    />
                     <Grid container spacing={2}>
                         <Grid item xs>
                             <Slider
@@ -831,6 +874,7 @@ export default function ConfigManager() {
                                 max={50}
                                 step={1}
                                 value={slideRange}
+                                disabled={!slideRangeEnable}
                                 onChange={(_, value) => { setSlideRange(value) }}
                                 onChangeCommitted={(_, value) => {
                                     setSlideRange(value)
@@ -1645,7 +1689,7 @@ export default function ConfigManager() {
             range={getPostionValueX(config["WHEEL"]["RANGE"])}
             shift_range={config["WHEEL"]["SHIFT_RANGE_ENABLE"] ? getPostionValueX(config["WHEEL"]["SHIFT_RANGE"]) : 0}
         />
-        <ViewShow x={getPostionValueX(config["MOUSE"]["POS"][0])} y={getPostionValueY(config["MOUSE"]["POS"][1])} range={getPostionValueX(config["MOUSE"]["RANGE"])} slide_range={getPostionValueX(config["MOUSE"]["SLIDE_RANGE"] || 0)} />
+        <ViewShow x={getPostionValueX(config["MOUSE"]["POS"][0])} y={getPostionValueY(config["MOUSE"]["POS"][1])} range={getPostionValueX(config["MOUSE"]["RANGE"])} slide_range={config["MOUSE"]["SLIDE_RANGE_ENABLE"] !== false ? getPostionValueX(config["MOUSE"]["SLIDE_RANGE"] || 0) : 0} />
         <input id="fileInput" type="file" style={{ display: "none" }} accept="image/*" onChange={handleFileChange} ></input>
         <SlotManagerDialog
             open={slotDialogOpen}

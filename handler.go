@@ -34,7 +34,10 @@ type TouchHandler struct {
 	view_init_y             int32                //初始化视角映射的y坐标
 	view_range              int32                //随机的范围
 	view_slide_range        int32                //滑动边界（缩放坐标系，相对视角中心）
+	view_slide_range_enable bool                 //滑动边界开关，关闭时以屏幕边界为外半径
+	view_handoff_delay      int                  //交接延迟ms，新旧触摸同时存在的时长
 	view_action_select      struct{ x, y int32 } //用户选择的视角映射点
+	view_release_pending    int32                //交接中待延迟释放的旧触摸id，-1表示无
 	view_current_x          int32                //当前视角映射的x坐标
 	view_current_y          int32                //当前视角映射的y坐标
 	view_speed_x            int32                //视角x方向的速度
@@ -353,7 +356,10 @@ func InitTouchHandler(
 		view_init_y:        int32(config_json.Get("MOUSE").Get("POS").GetIndex(1).MustFloat64() * float64(screenSizeY)),
 		view_range:         int32(config_json.Get("MOUSE").Get("RANGE").MustFloat64() * float64(screenSizeX)),
 		view_slide_range:   int32(config_json.Get("MOUSE").Get("SLIDE_RANGE").MustFloat64() * 0x7ffffffe),
+		view_slide_range_enable: config_json.Get("MOUSE").Get("SLIDE_RANGE_ENABLE").MustBool(),
+		view_handoff_delay:      getViewHandoffDelay(config_json),
 		view_action_select: struct{ x, y int32 }{-1, -1},
+		view_release_pending: -1,
 		view_current_x:     int32(config_json.Get("MOUSE").Get("POS").GetIndex(0).MustFloat64() * float64(screenSizeX)),
 		view_current_y:     int32(config_json.Get("MOUSE").Get("POS").GetIndex(1).MustFloat64() * float64(screenSizeY)),
 		view_speed_x:       int32(config_json.Get("MOUSE").Get("SPEED").GetIndex(0).MustFloat64() * 0x7ffffffe / float64(screenSizeX)),
@@ -398,6 +404,15 @@ func InitTouchHandler(
 	}
 }
 
+// 交接延迟（新旧触摸重叠时长），配置缺失或<=0时回退默认7ms（约覆盖120Hz一帧）
+func getViewHandoffDelay(config_json *simplejson.Json) int {
+	d := config_json.Get("MOUSE").Get("HANDOFF_DELAY").MustInt()
+	if d <= 0 {
+		return 7
+	}
+	return d
+}
+
 func (self *TouchHandler) reloadConfigure(mapperFilePath string) {
 	if self.map_on {
 		self.switch_map_mode()
@@ -433,6 +448,8 @@ func (self *TouchHandler) reloadConfigure(mapperFilePath string) {
 	self.view_init_y = int32(config_json.Get("MOUSE").Get("POS").GetIndex(1).MustFloat64() * float64(screenSizeY))
 	self.view_range = int32(config_json.Get("MOUSE").Get("RANGE").MustFloat64() * float64(screenSizeX))
 	self.view_slide_range = int32(config_json.Get("MOUSE").Get("SLIDE_RANGE").MustFloat64() * 0x7ffffffe)
+	self.view_slide_range_enable = config_json.Get("MOUSE").Get("SLIDE_RANGE_ENABLE").MustBool()
+	self.view_handoff_delay = getViewHandoffDelay(config_json)
 	self.view_current_x = int32(config_json.Get("MOUSE").Get("POS").GetIndex(0).MustFloat64() * float64(screenSizeX))
 	self.view_current_y = int32(config_json.Get("MOUSE").Get("POS").GetIndex(1).MustFloat64() * float64(screenSizeY))
 	self.view_speed_x = int32(config_json.Get("MOUSE").Get("SPEED").GetIndex(0).MustFloat64() * 0x7ffffffe / float64(screenSizeX))
@@ -597,22 +614,41 @@ func (self *TouchHandler) handel_view_move(offset_x int32, offset_y int32) { //�
 	}
 	self.view_current_x += offset_x * self.view_speed_x
 	self.view_current_y += offset_y * self.view_speed_y
-	// 滑动边界判断（相对视角中心的正方形区域，仅常规视角滑动时生效）
+	// 滑动边界判断（仅常规视角滑动时生效）
 	slide_out := false
-	if self.view_action_select.x == -1 && self.view_action_select.y == -1 && self.view_slide_range > 0 {
-		init_sx, init_sy := self.get_scaled_pos(self.view_init_x, self.view_init_y)
-		slide_out = self.view_current_x < init_sx-self.view_slide_range || self.view_current_x > init_sx+self.view_slide_range ||
-			self.view_current_y < init_sy-self.view_slide_range || self.view_current_y > init_sy+self.view_slide_range
+	if self.view_action_select.x == -1 && self.view_action_select.y == -1 {
+		if self.view_slide_range_enable && self.view_slide_range > 0 {
+			// 开启外半径：相对视角中心的正方形区域
+			init_sx, init_sy := self.get_scaled_pos(self.view_init_x, self.view_init_y)
+			slide_out = self.view_current_x < init_sx-self.view_slide_range || self.view_current_x > init_sx+self.view_slide_range ||
+				self.view_current_y < init_sy-self.view_slide_range || self.view_current_y > init_sy+self.view_slide_range
+		}
+		// 关闭外半径：以屏幕边界为界，由下方 <0 检查兜底（缩放坐标全屏域0~0x7ffffffe，int32溢出即触界）
 	}
-	if slide_out || self.view_current_x < 0 || self.view_current_y < 0 { //超出滑动边界或屏幕边界，回到中间重新选点
-		self.touch_release(self.view_id)                                 //先抬起旧触摸
-		time.Sleep(time.Duration(5+rand.Intn(6)) * time.Millisecond)     //随机延迟5~10ms，模拟重新落点
+	if slide_out || self.view_current_x < 0 || self.view_current_y < 0 { //超出滑动边界或屏幕边界（缩放坐标溢出），回到中间重新选点
+		// 新触摸立即注册（内半径随机落点），旧触摸延迟5~10ms释放，保持触摸连续无断触
 		self.view_current_x, self.view_current_y = self.getViewStartPos()
 		tmp_view_id := self.touch_require(self.view_current_x, self.view_current_y, false)
+		old_view_id := self.view_id
+		self.view_id = tmp_view_id
 		self.view_current_x += offset_x * self.view_speed_x
 		self.view_current_y += offset_y * self.view_speed_y
 		self.touch_move(tmp_view_id, self.view_current_x, self.view_current_y, false)
-		self.view_id = tmp_view_id
+		// 若上一次交接的旧触摸尚未释放（极端连续越界），先补释放
+		if self.view_release_pending != -1 {
+			self.touch_release(self.view_release_pending)
+			self.view_release_pending = -1
+		}
+		self.view_release_pending = old_view_id
+		go (func() {
+			time.Sleep(time.Duration(self.view_handoff_delay) * time.Millisecond) //交接延迟，新旧触摸重叠时长，防止断触
+			self.view_lock.Lock()
+			defer self.view_lock.Unlock()
+			if self.view_release_pending == old_view_id {
+				self.view_release_pending = -1
+				self.touch_release(old_view_id)
+			}
+		})()
 	} else {
 		self.touch_move(self.view_id, self.view_current_x, self.view_current_y, false)
 	}
