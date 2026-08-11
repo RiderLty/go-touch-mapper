@@ -9,6 +9,8 @@
             "SWITCH_KEYS": ["KEY_GRAVE"],
             "RANGE": 0.05,
             "SLIDE_RANGE": 0.5,
+            "SLIDE_RANGE_ENABLE": true,
+            "HANDOFF_DELAY": 7,
             "POS": [
                 0.52,
                 0.5
