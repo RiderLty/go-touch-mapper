@@ -294,3 +294,7 @@ PluginConfigTemplate指定插件需要的参数，会显示在web配置界面
 ## ADB 下载
 
 [platform-tools-latest-windows](https://vip.123pan.cn/1833788059/23477218)
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。版权归 RiderLty 所有，具体条款请参阅仓库根目录的 [LICENSE](LICENSE) 文件。
